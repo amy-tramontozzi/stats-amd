@@ -1,0 +1,275 @@
+---
+title: "Assignment 2"
+author: "Ethan McManus, Fred Montero, Amy Tramontozzi"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(lmtest)
+library(whitestrap)
+library(zoo)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r import-data, include=FALSE}
+stocks <- read.csv("stockreturns.csv")
+```
+
+```{r amd-filter, include=FALSE}
+amd <- filter(stocks, hcomnam == "ADVANCED MICRO DEVICES INC")
+```
+
+```{r new-variables, include=FALSE}
+avg <- stocks %>%
+  filter(hcomnam == "NVIDIA CORP" | hcomnam == "ANALOG DEVICES INC" | hcomnam == "QUALCOMM INC" | hcomnam == "INTEL CORP" | hcomnam == "INTERNATIONAL BUSINESS MACHS COR") %>%
+  group_by(date) %>%
+  summarize(avg_ret = mean(ret, na.rm=TRUE),
+            total_sum = sum(vol, na.rm=TRUE), .groups='drop')
+```
+
+# Sample of Filtered Dataset
+```{r merge-dfs, echo=FALSE}
+join <- left_join(amd, avg, by = "date")
+row.names(join) <- join$date
+join$date <- NULL
+
+join[,1:4] <- NULL
+join[,3:4] <- NULL
+
+date_row_names <- as.Date(row.names(join))
+
+data_2022 <- join[format(date_row_names, "%Y") == "2022", ]
+
+head(data_2022)
+```
+
+# 2022 Model
+```{r q1, include=FALSE}
+# Question 1
+q1_model <- lm(ret~avg_ret + sprtrn, data = data_2022)
+q1summary <- summary(q1_model)
+
+paste("Intercept point estimate: ", q1_model$coefficients[1])
+paste("Beta 1 point estimate: ", q1_model$coefficients[2])
+paste("Beta 2 point estimate: ", q1_model$coefficients[3])
+```
+
+```{r table, echo=FALSE}
+estimates <- coef(q1summary)
+
+# Create a data frame for the summary table
+data.frame(
+  Estimate = estimates[, "Estimate"],
+  Std.Error = estimates[, "Std. Error"],
+  Statistic = estimates[, "t value"],
+  P.Value = estimates[, "Pr(>|t|)"],
+  R.Squared = q1summary$r.squared
+)
+```
+Using the equally-weighted average of the daily return for a group of AMD’s peers and competitors as the measure of how its peers are doing (which yielded a higher R^2 value than the model using the total daily volume for these five peer companies), the Beta 1 point estimate is extremely statistically significant, with a p-value <2e-16. The Beta 2 point estimate is significant at the 5% (and thus 10%) level, with a p-value of 0.0265. The estimate for the intercept is not statistically significant at the 5% level. 
+
+The regression table provides valuable insights into the relationships between the independent variables and the dependent variable. The intercept, which is approximately -0.0009, represents the expected value of the AMD daily return when both the average daily return of the peer companies and SP500 index are zero. While this value may not hold practical significance, it serves as a baseline for understanding the effect of the predictors. The coefficient for the average peer return is 1.24, indicating that for each one-unit increase in average returns, the AMD daily return is expected to increase by about 1.24 units, assuming the SP500 index remains constant. This suggests a strong positive relationship between peer returns and the AMD returns. Similarly, the coefficient for the SP500 index is 0.39, meaning that each one-unit increase in the index is associated with an increase of approximately 0.39 units in the AMD returns, indicating a positive but weaker effect compared to peer returns
+
+The R^2 value of 0.771 suggests that approximately 77.1% of the variability in the AMD daily returns can be explained by the model, indicating a solid fit. Overall, these results highlight that both peer returns and the SP500 index are significant predictors of the dependent variable.
+
+## K-S test
+```{r ks-test, echo=FALSE}
+residuals <- resid(q1_model)
+ks_test <- ks.test(residuals, "pnorm", mean = 0, sd = sd(residuals))
+print(ks_test)
+```
+The p-value of a K-S test is greater than 0.05 (0.3386), suggesting that the residuals could be normally distributed.
+
+## Shapiro-Wilk test
+```{r shaprio-wilk-test, echo=FALSE}
+shapiro_test <- shapiro.test(residuals)
+print(shapiro_test)
+```
+With an threshold of 5%, we can reject the null hypothesis (0.01625 < 0.05) using a Shapiro-Wilk test, suggesting that the data significantly deviate from a normal distribution. This indicates that the residuals are likely not normally distributed.
+
+## Durbin-Watson test
+```{r autocorrelation, echo=FALSE}
+acf(residuals, main = "ACF of Residuals", lag.max = 20, plot = TRUE)
+time_vector <- seq_along(residuals)
+
+plot(time_vector, residuals, type = "l", col = "black",
+     xlab = "Time", ylab = "Residuals",
+     main = "Residuals Over Time")
+abline(h = 0, col = "red", lty = 3)  
+
+dw_test <- dwtest(q1_model)
+print(dw_test)
+```
+The Durbin-Watson (DW) test is a statistical method used to detect autocorrelation in the residuals of a regression analysis, specifically focusing on first-order autocorrelation. The DW statistic is calculated by comparing the squared differences between successive residuals to the total sum of squared residuals. The resulting value ranges from 0 to 4, where a value of around 2 suggests no autocorrelation. A value significantly lower than 2 indicates positive autocorrelation, while a value significantly higher than 2 suggests negative autocorrelation.
+
+A Durbin-Watson value of 1.9573 is very close to 2, indicating that there is little to no evidence of autocorrelation in the residuals. This suggests that the residuals are relatively independent, which is a desirable property in regression analysis.
+
+## B-P test
+```{r bp-test, echo=FALSE}
+bptest_test <- bptest(q1_model)
+print(bptest_test)
+```
+Because the B-P test p-value is > 0.05, we cannot reject the null hypothesis of homoscedasticity (constant variance of residuals). This implies that there may not be heteroskedasticity which moves linearly with the predictors.
+
+## White test
+```{r white-test, echo=FALSE}
+white_test <- white_test(q1_model)
+print(white_test)
+```
+Although the p-value is greater than 0.05, White's test resulted in a p-value for smaller than that of the BP test that is just next to the threshold. This suggests that there could be some non-linear heteroskedasticity or misspecification of the model. 
+
+# October 12th, 2011 - October 11th, 2012 Model
+```{r q2-model, include=FALSE}
+# Question 2
+start_date <- as.Date("2011-10-12")
+end_date <- as.Date("2012-10-11")
+
+filtered_data <- join[date_row_names >= start_date & date_row_names <= end_date, ]
+
+q2_model <- lm(ret~avg_ret + sprtrn, data = filtered_data)
+q2summary <- summary(q2_model)
+
+paste("Intercept point estimate: ", q2_model$coefficients[1])
+paste("Beta 1 point estimate: ", q2_model$coefficients[2])
+paste("Beta 2 point estimate: ", q2_model$coefficients[3])
+```
+In comparing the two regression models for the years 2022 and 2011, several notable differences emerge in both the parameter estimates and the overall model fit. The intercept in the 2022 model is approximately -0.0009 with a p-value of 0.4539, indicating it is not statistically significant. In contrast, the intercept for the 2011 model is -0.0022 with a p-value of 0.1148, which is also not significant but closer to the threshold. For the peer return variable, the 2022 model shows a coefficient of 1.2379, which is still highly significant (p < 2e-16), suggesting a strong positive relationship with the response variable. The 2011 model has a lower coefficient of 1.1332, yet it remains significant (p = 4.3e-08), indicating that while the relationship is still strong, it is slightly less pronounced than in 2022. Regarding the SP500 index variable, the 2022 model reports a coefficient of 0.3878 with a p-value of 0.0265, demonstrating a statistically significant positive effect on AMD returns. In comparison, the 2011 model shows a significantly higher coefficient of 0.8541 (p = 0.00113), indicating that the impact of S&P returns on the response variable was stronger in 2011. Overall, the R-squared values also reflect these differences, with the 2022 model showing a higher R-squared of 0.771, suggesting a better fit, compared to the 2011 model's R-squared of 0.537, which indicates a weaker explanatory power.
+
+## K-S test
+```{r ks-test-2, echo=FALSE}
+residuals2 <- resid(q2_model)
+ks_test2 <- ks.test(residuals2, "pnorm", mean = 0, sd = sd(residuals2))
+print(ks_test2)
+```
+Because the p-value is less than 0.05 (0.04717), the K-S test rejects the null hypothesis of normally distributed residuals. 
+
+## Shapiro-Wilk test
+```{r shaprio-wilk-test-2, echo=FALSE}
+shapiro_test2 <- shapiro.test(residuals2)
+print(shapiro_test2)
+```
+The null hypothesis is strongly rejected (1.045e-09 < 0.05), suggesting that the data significantly deviate from a normal distribution. Thus, the assumption of normality of the residuals does not hold.
+
+## Durbin-Watson test
+```{r autocorrelation-2, echo=FALSE}
+acf(residuals2, main = "ACF of Residuals", lag.max = 20, plot = TRUE)
+time_vector2 <- seq_along(residuals2)
+
+plot(time_vector2, residuals2, type = "l", col = "black",
+     xlab = "Time", ylab = "Residuals",
+     main = "Residuals Over Time")
+abline(h = 0, col = "red", lty = 3)  
+
+dw_test2 <- dwtest(q2_model)
+print(dw_test2)
+```
+A Durbin-Watson value of 1.9029 is still very close to 2, indicating that there is little evidence of autocorrelation in the residuals. This suggests that the residuals are relatively independent.
+
+## B-P test
+```{r bp-test-2, echo=FALSE}
+bptest_test2 <- bptest(q2_model)
+print(bptest_test2)
+```
+Because the B-P test p-value is much greater than 0.05, the assumption of (linear) homoscedasticity is supported.
+
+## White test
+```{r white-test-, echo=FALSE}
+white_test2 <- white_test(q2_model)
+print(white_test2)
+```
+Once again, the p-value of 0.871 is greater than 0.05, supporting the assumption of heteroscedasticity. 
+
+Taken together, it appears that the model passes the tests of homoscedasticity, independence of residuals, but not normality of residuals. Thus, the model does not pass the IID assumptions.
+
+## AMD shares predictions
+```{r prediction, echo=FALSE}
+new_data <- data.frame(
+  avg_ret = c(-0.0018764, 0.0251338),  # Replace with actual values for the specified dates
+  sprtrn = c(-0.002966, 0.016571)     
+)
+
+predictions <- predict(q2_model, newdata = new_data, interval = "prediction", level = 0.95)
+
+actual_returns <- c(-0.143750, -0.167939) 
+
+worst_case_returns <- predictions[, "lwr"]  # Assuming 'predictions' contains your prediction results
+
+excess_returns <- actual_returns - worst_case_returns
+
+results_table <- data.frame(
+  Date = as.Date(c("2012-10-12", "2012-10-19")),
+  Actual_Return = actual_returns,
+  Worst_Case_Return = worst_case_returns,
+  Excess_Return = excess_returns
+)
+
+print(results_table)
+```
+The excess returns for AMD shares on October 12 and October 19, 2012, provide  insights into the stock's performance relative to market expectations. The excess return for October 12, at -0.0942, indicates that AMD's actual return was significantly worse than the worst-case prediction generated by the regression model, suggesting a substantial under-performance relative to what was anticipated based on market activity. Similarly, the excess return for October 19, at -0.1654, reflects an even larger deviation from expectations, indicating that factors influencing AMD's stock performance on these days were not captured by the model, leading to worse-than-expected outcomes.
+
+These negative excess returns have implications for market efficiency. In an efficient market, actual returns should align closely with predicted returns, but the significant negative excess returns observed suggest possible inefficiencies, indicating that the available information at the time did not fully reflect the realities affecting AMD's performance. Such consistent under-performance could signal that investors were reacting to unforeseen information or events that the model failed to incorporate.
+
+From a legal standpoint, these excess returns could be relevant in discussions about securities fraud or insider trading. If investors perceive that they were misled about the potential performance of AMD's stock, particularly when actual returns significantly diverge from predicted returns, it could lead to claims of damages. 
+
+```{r abret, echo=FALSE}
+abret1 <- -0.09415735  
+abret2 <- -0.16536890
+
+aggregate_abnormal_return <- (1 + abret1) * (1 + abret2) - 1
+
+paste(c("Aggregate Abnormal Return: ", aggregate_abnormal_return))
+
+stock_price <- stocks %>%
+  filter(hcomnam == "ADVANCED MICRO DEVICES INC")
+stock_date <- as.Date("2012-10-11")
+
+stock_price <- stock_price[date_row_names == stock_date, ]
+
+amd_price <- stock_price[5]
+shares_outstanding <- stock_price[8]  
+market_cap <- amd_price * shares_outstanding
+
+paste(c("Market Capitalization: ", market_cap))
+
+estimated_damages <- market_cap * aggregate_abnormal_return
+
+paste(c("Estimated Damages: ", estimated_damages))
+```
+
+## Best Model
+```{r final-model, echo=FALSE}
+final <- merge(amd, avg, by = "date")
+
+final <- final %>%
+  arrange(as.Date(date)) %>%
+  mutate(
+    moving_avg_price5 = rollmean(prc, k = 5, fill = NA, align = "right"),
+    volume_lag1 = lag(vol, 1),
+    volume_lag2 = lag(vol, 2),
+    log_volume = log(vol)  
+  ) %>%
+  na.omit() 
+
+q3_model <- lm(vol~volume_lag1 + sprtrn + total_sum + shrout + prc + moving_avg_price5, data = final)
+summary(q3_model)
+```
+The response variable is total volume, which provides a direct measure of the actual trading activity. The first included predictor is a 1-day lag on AMD trading volume. Lagged volume can help capture momentum in trading activity. For instance, if trading volume has been increasing, it might suggest a continuing trend, which could affect future volume. This is because traders often react to past trading activity. A significant volume on a previous day can signal heightened interest in a stock, influencing current behavior. Additionally, daily trading volumes can be volatile and subject to random fluctuations. By including lagged values, the model can smooth out this noise and focus on more persistent trends. 
+
+The SP500 index was also included as a macroeconomic indicator. Changes in interest rates can influence market behavior and investor sentiment. 
+
+The summed daily volume for the peer companies was included. This predictor serves as an indicator of market sentiment within the sector; when trading volumes rise across peer companies, it often reflects a broader trend that could influence AMD's own volume. Trading activity among companies in the same industry is often correlated due to shared factors like economic conditions, industry news, or regulatory changes. Increased volume in peer stocks can signal opportunities or concerns that also impact AMD. Moreover, spikes in volume among peers can indicate heightened volatility, which may further affect AMD's trading dynamics. Finally, high trading volumes in peer companies enhance overall liquidity in the sector, making it easier for investors to enter or exit positions in AMD. 
+
+The shares outstanding on a given day is a crucial predictor because it helps assess the company's market capitalization and overall liquidity. A higher number of shares outstanding can indicate a greater potential for trading activity, as it influences how easily investors can buy or sell shares without significantly impacting the stock price.
+
+The stock price is also good predictor of sales volume on a given day because it reflects market sentiment and investor perception of the company's value. When the stock price is rising, it often indicates positive news or strong performance expectations, leading to increased trading activity as investors buy in. Conversely, a declining stock price might prompt selling activity, resulting in higher volume as traders react to potential losses or negative sentiment. Additionally, changes in stock price can trigger automated trading strategies, further amplifying volume fluctuations. 
+
+Finally, a 5-day moving average of prices is a good indicator because it smooths out short-term fluctuations and provides a clearer view of the underlying trend in a stock's price movement. By averaging the prices over a short period, it reduces noise from daily price volatility, helping traders and analysts identify more stable trends. This indicator can also signal potential buy or sell opportunities. Additionally, moving averages are widely used in trading strategies, making them a self-fulfilling prophecy as many traders react to these signals, thereby influencing trading volume and price movements.
+
+All of the variables in the model were statistically significant beyond 1%. The final R^2 value calculated is 0.6827, implying that over 68% of the variation in AMD's daily sales volume is explained by the included predictors. 
